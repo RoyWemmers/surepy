@@ -122,8 +122,7 @@ def cli(ctx: click.Context, json: bool, user_token: str, version: bool) -> None:
     "-u", "--user", required=True, type=str, help="sure petcare api account username (email)"
 )
 @click.option(
-    "-p",
-    "--password",
+    "-p", "--password",
     required=True,
     type=str,
     help="sure petcare api account password",
@@ -431,12 +430,101 @@ async def locking(ctx: click.Context, device_id: int, mode: str, token: str | No
 @click.option(
     "-d", "--device", "device_id", required=True, type=int, help="id of the sure petcare device"
 )
+@click.option("-p", "--pet", "pet_id", required=False, type=int, help="id of the pet")
 @click.option(
-    "--lock-time",
+    "-m",
+    "--mode",
     required=True,
-    type=time.fromisoformat,
-    help="Curfew lock time (in household's timezone)",
+    type=click.Choice(["add", "remove", "list"]),
+    help="assignment action",
 )
+@click.option(
+    "-t", "--token", required=False, type=str, help="sure petcare api token", hide_input=True
+)
+@coro
+async def feederassign(ctx: click.Context, device_id: int, mode: str, pet_id: int | None = None, token: str | None = None) -> None:
+    """feeder pet assignment"""
+
+    token = token if token else ctx.obj.get("token", None)
+
+    sp = Surepy(auth_token=str(token))
+
+    if (feeder := await sp.get_device(device_id=device_id)) and (type(feeder) == Feeder):
+
+        pets: list[Pet] = await sp.get_pets()
+
+        if mode == "list":
+            table = Table(box=box.MINIMAL)
+            table.add_column("ID", style="bold")
+            table.add_column("Name", style="")
+            table.add_column("Created At", style="")
+            for tag in feeder.tags.values():
+                for pet in pets:
+                    if tag.id == pet.tag_id:
+                        table.add_row(
+                            str(pet.id),
+                            str(pet.name),
+                            str(datetime.fromisoformat(tag.created_at())),
+                        )
+            console.print(table, "", sep="\n")
+        if mode == "add":
+            for pet in pets:
+                if pet.id == pet_id:
+                    for tag in feeder.tags.values():
+                        if tag.id == pet.tag_id:
+                            console.print(f"Pet is already assigned to this feeder.")
+                            return
+                    if await sp.sac._add_tag_to_device(device_id=device_id, tag_id=pet.tag_id):
+                        console.print(f"✅ {pet.name} added to '{feeder.name}' 🐾")
+        if mode == "remove":
+            for pet in pets:
+                if pet.id == pet_id:
+                    for tag in feeder.tags.values():
+                        if tag.id == pet.tag_id:
+                            if await sp.sac._remove_tag_from_device(device_id=device_id, tag_id=pet.tag_id):
+                                console.print(f"✅ {pet.name} removed from '{feeder.name}' 🐾")
+                                return
+                    console.print("Pet is not assigned to this feeder.")
+        else:
+            return
+        # await sp.sac.close_session()
+
+
+@cli.command()
+@click.pass_context
+@click.option("-t", "--token", required=False, type=str, help="sure petcare api token")
+@click.argument("device_id", type=int)
+@click.argument("tag_id", type=int)
+@click.argument("mode", type=click.Choice(["enable", "disable"]))
+@coro
+async def indoor_only(
+    ctx: click.Context, device_id: int, tag_id: int, mode: str, token: str | None = None
+) -> None:
+    """Set indoor only mode for a pet.
+
+    DEVICE_ID: ID of the device (flap/door)
+    TAG_ID: ID of the pet's tag
+    MODE: either 'enable' or 'disable'
+    """
+    token = token if token else ctx.obj.get("token", None)
+
+    async with ClientSession(connector=TCPConnector(ssl=False)) as session:
+        sp = Surepy(auth_token=token, session=session)
+
+        enable = mode == "enable"
+        await sp.set_indoor_only(device_id, tag_id, enable)
+
+        # Print confirmation
+        status = "enabled" if enable else "disabled"
+        print(f"Indoor only mode {status} for pet tag {tag_id} on device {device_id}")
+
+
+@cli.command()
+@click.pass_context
+@click.option(
+    "-d", "--device", "device_id", required=True, type=int, help="id of the sure petcare device"
+)
+@click.option("--lock-time", required=True, type=time.fromisoformat, help="Curfew lock time (in household's timezone)")
 @click.option(
     "--unlock-time",
     required=True,
@@ -521,69 +609,6 @@ async def position(
 
         # await sp.sac.close_session()
 
-@cli.command()
-@click.pass_context
-@click.option(
-    "-d", "--device", "device_id", required=True, type=int, help="id of the sure petcare device"
-)
-@click.option("-p", "--pet", "pet_id", required=False, type=int, help="id of the pet")
-@click.option(
-    "-m",
-    "--mode",
-    required=True,
-    type=click.Choice(["add", "remove", "list"]),
-    help="assignment action",
-)
-@click.option(
-    "-t", "--token", required=False, type=str, help="sure petcare api token", hide_input=True
-)
-@coro
-async def feederassign(ctx: click.Context, device_id: int, mode: str, pet_id: int | None = None, token: str | None = None) -> None:
-    """feeder pet assignment"""
-
-    token = token if token else ctx.obj.get("token", None)
-
-    sp = Surepy(auth_token=str(token))
-
-    if (feeder := await sp.get_device(device_id=device_id)) and (type(feeder) == Feeder):
-
-        pets: list[Pet] = await sp.get_pets()
-
-        if mode == "list":
-            table = Table(box=box.MINIMAL)
-            table.add_column("ID", style="bold")
-            table.add_column("Name", style="")
-            table.add_column("Created At", style="")
-            for tag in feeder.tags.values():
-                for pet in pets:
-                    if tag.id == pet.tag_id:
-                        table.add_row(
-                            str(pet.id),
-                            str(pet.name),
-                            str(datetime.fromisoformat(tag.created_at())),
-                        )
-            console.print(table, "", sep="\n")
-        if mode == "add":
-            for pet in pets:
-                if pet.id == pet_id:
-                    for tag in feeder.tags.values():
-                        if tag.id == pet.tag_id:
-                            console.print(f"Pet is already assigned to this feeder.")
-                            return
-                    if await sp.sac._add_tag_to_device(device_id=device_id, tag_id=pet.tag_id):
-                        console.print(f"✅ {pet.name} added to '{feeder.name}' 🐾")
-        if mode == "remove":
-            for pet in pets:
-                if pet.id == pet_id:
-                    for tag in feeder.tags.values():
-                        if tag.id == pet.tag_id:
-                            if await sp.sac._remove_tag_from_device(device_id=device_id, tag_id=pet.tag_id):
-                                console.print(f"✅ {pet.name} removed from '{feeder.name}' 🐾")
-                                return
-                    console.print("Pet is not assigned to this feeder.")
-        else:
-            return
-        # await sp.sac.close_session()
 
 if __name__ == "__main__":
     cli(obj={})

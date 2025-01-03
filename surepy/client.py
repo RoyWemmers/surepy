@@ -428,3 +428,21 @@ class SureAPIClient:
 
         if response := await self.call(method="DELETE", resource=resource):
             return response
+
+    async def set_indoor_only(self, device_id: int, tag_id: int, enable: bool) -> None:
+        """Set indoor only mode for a pet.
+
+        Args:
+            device_id (int): The ID of the device
+            tag_id (int): The ID of the pet's tag
+            enable (bool): True to enable indoor only mode, False to disable
+
+        Returns:
+            None
+        """
+        profile = 3 if enable else 2
+        await self.call(
+            method="PUT",
+            resource=DEVICE_TAG_RESOURCE.format(device_id=device_id, tag_id=tag_id),
+            json={"profile": profile},
+        )
